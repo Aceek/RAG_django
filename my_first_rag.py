@@ -20,10 +20,6 @@ from langchain.chains import create_retrieval_chain
 from langchain.chains import create_history_aware_retriever
 
 
-
-
-
-
 def _is_valid_identifier(value: str) -> bool:
     """Check if the session ID is in a valid format."""
     # Use a regular expression to match the allowed characters
@@ -98,7 +94,6 @@ prompt = ChatPromptTemplate.from_messages(
 document_chain = create_stuff_documents_chain(llm, prompt)
 retriever_chain = create_history_aware_retriever(llm, retriever, prompt)
 retrieval_chain = create_retrieval_chain(retriever_chain, document_chain)
-
 
 
 # 5. create chain history
