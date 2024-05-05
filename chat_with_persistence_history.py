@@ -11,39 +11,20 @@ fetch configuration from the request.
 import re
 from pathlib import Path
 from typing import Callable, Union
-
-from fastapi import FastAPI, HTTPException
 from langchain_openai import ChatOpenAI
 from langchain_openai import OpenAIEmbeddings
+from fastapi import FastAPI, HTTPException
 from langchain_community.chat_message_histories import FileChatMessageHistory
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables.history import RunnableWithMessageHistory
-from langchain_community.document_loaders import PyPDFium2Loader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain.storage import LocalFileStore
-from langchain.embeddings import CacheBackedEmbeddings
-from langchain_core.runnables import RunnablePassthrough
-from langchain_community.vectorstores import FAISS
-from langchain_core.output_parsers import StrOutputParser
-
 
 from langserve import add_routes
 from langserve.pydantic_v1 import BaseModel, Field
 
-# 1. Load Retriever
-loader = PyPDFium2Loader("django-readthedocs-io-en-latest.pdf")
-docs = loader.load()
-text_splitter = RecursiveCharacterTextSplitter()
-documents = text_splitter.split_documents(docs)
-embeddings = OpenAIEmbeddings()
-store = LocalFileStore("./cache/")
-cached_embedder = CacheBackedEmbeddings.from_bytes_store(
-    embeddings, store, namespace=embeddings.model
-)
-vector_store = FAISS.from_documents(documents, cached_embedder)
-retriever = vector_store.as_retriever()
+import dotenv
 
+dotenv.load_dotenv()
 
 def _is_valid_identifier(value: str) -> bool:
     """Check if the session ID is in a valid format."""
@@ -88,15 +69,40 @@ app = FastAPI(
     description="Spin up a simple api server using Langchain's Runnable interfaces",
 )
 
+from langchain_community.document_loaders import PyPDFium2Loader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain.storage import LocalFileStore
+from langchain.embeddings import CacheBackedEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_core.runnables import RunnableParallel
+
+
+
+# 1. Load Retriever
+loader = PyPDFium2Loader("django-readthedocs-io-en-latest.pdf")
+docs = loader.load()
+text_splitter = RecursiveCharacterTextSplitter()
+documents = text_splitter.split_documents(docs)
+embeddings = OpenAIEmbeddings()
+store = LocalFileStore("./cache/")
+cached_embedder = CacheBackedEmbeddings.from_bytes_store(
+    embeddings, store, namespace=embeddings.model
+)
+vector_store = FAISS.from_documents(documents, cached_embedder)
+retriever = vector_store.as_retriever()
+
 
 # Declare a chain
+
 qa_system_prompt = """You are an assistant for question-answering tasks. \
 Use the following pieces of retrieved context to answer the question. \
+You can keep a trace of previous questions and answers in history. \
 If you don't know the answer, just say that you don't know. \
 Use three sentences maximum and keep the answer concise.\
 
-Context : {context}
+# Context : {context}
 """
+
 prompt = ChatPromptTemplate.from_messages(
     [
         ("system", qa_system_prompt),
@@ -107,22 +113,15 @@ prompt = ChatPromptTemplate.from_messages(
 
 llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
 
-# chain = (
-#     {"context": retriever}
-#     | prompt
-#     | llm
-#     | StrOutputParser()
-# )
+from operator import itemgetter
+from langchain_core.runnables import RunnablePassthrough
 
-from langchain.chains import ConversationalRetrievalChain
+context = itemgetter("human_input") | retriever
+first_step = RunnablePassthrough.assign(context=context)
 
-chain = ConversationalRetrievalChain.from_llm(
-    llm=llm,
-    qa_prompt=qa_system_prompt,
-    retriever=retriever,
-    verbose=True,
-    return_source_documents=True,
-)
+
+chain = first_step | prompt | llm
+
 
 class InputChat(BaseModel):
     """Input for the chat endpoint."""
